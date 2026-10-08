@@ -1,23 +1,35 @@
 import sys
 import json
-import wave
 import os
 import re
-from vosk import Model, KaldiRecognizer
+from faster_whisper import WhisperModel
 from pydub import AudioSegment
 from deepmultilingualpunctuation import PunctuationModel
 
-# Загружаем модель пунктуации один раз при старте
-# (это долго — около 30 секунд при первом запуске, потом быстро)
+# Модель Whisper (загружается один раз при старте)
+# "small" — хороший баланс скорости и точности, весит ~500 МБ
+# Первый запуск скачает модель в кэш (~/.cache/huggingface)
+print("[INFO] Загрузка модели Whisper...", file=sys.stderr)
+whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+print("[INFO] Whisper загружен.", file=sys.stderr)
+
+# Модель пунктуации (загружается один раз)
 print("[INFO] Загрузка модели пунктуации...", file=sys.stderr)
 punctuation_model = PunctuationModel()
 print("[INFO] Модель пунктуации загружена.", file=sys.stderr)
 
 
 def convert_to_wav(input_path):
-    """Конвертирует MP3 (или другой формат) в WAV 16 кГц, моно."""
+    """Конвертирует любой формат (MP3, M4A, WAV) в WAV 16 кГц, моно."""
     if input_path.lower().endswith('.wav'):
-        return input_path
+        # Проверим параметры — Whisper сам может работать с разными WAV,
+        # но лучше привести к 16 кГц, моно
+        try:
+            audio = AudioSegment.from_file(input_path)
+            if audio.frame_rate == 16000 and audio.channels == 1:
+                return input_path
+        except Exception:
+            pass
 
     audio = AudioSegment.from_file(input_path)
     audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
@@ -28,51 +40,27 @@ def convert_to_wav(input_path):
 
 
 def restore_case(text):
-    """
-    Поднимает регистр: первая буква предложения заглавная,
-    местоимение 'i' -> 'I'.
-    """
-    # 'i' -> 'I' (только как отдельное слово)
+    """Поднимает регистр: первая буква предложения заглавная, 'i' → 'I'."""
     text = re.sub(r'\bi\b', 'I', text)
-
-    # Первая буква после точки, вопросительного или восклицательного знака
-    # + начало текста
-    def capitalize_after(match):
-        return match.group(1) + match.group(2).upper()
-
-    text = re.sub(r'(^|[.!?]\s+)([a-zа-я])', capitalize_after, text)
-
+    text = re.sub(r'(^|[.!?]\s+)([a-zа-я])', lambda m: m.group(1) + m.group(2).upper(), text)
     return text
 
 
-def recognize(audio_path, model_path):
+def recognize(audio_path, language='en'):
     # Конвертируем в WAV, если нужно
     wav_path = convert_to_wav(audio_path)
 
-    wf = wave.open(wav_path, "rb")
+    # Распознавание через Whisper
+    # language='en' — явно указываем английский (для ЕГЭ)
+    segments, info = whisper_model.transcribe(
+        wav_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True,  # фильтр тишины
+    )
 
-    if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 16000:
-        return json.dumps({"error": "Аудио должно быть WAV, 16 кГц, моно"})
-
-    # Распознавание речи
-    model = Model(model_path)
-    recognizer = KaldiRecognizer(model, wf.getframerate())
-
-    result_text = []
-    while True:
-        data = wf.readframes(4000)
-        if len(data) == 0:
-            break
-        if recognizer.AcceptWaveform(data):
-            res = json.loads(recognizer.Result())
-            if res.get("text"):
-                result_text.append(res["text"])
-
-    final = json.loads(recognizer.FinalResult())
-    if final.get("text"):
-        result_text.append(final["text"])
-
-    raw_text = " ".join(result_text).strip()
+    # Собираем все сегменты в один текст
+    raw_text = " ".join(segment.text.strip() for segment in segments).strip()
 
     if not raw_text:
         return json.dumps({"text": ""})
@@ -87,14 +75,21 @@ def recognize(audio_path, model_path):
     # Поднимаем регистр
     final_text = restore_case(punctuated)
 
+    # Чистим временный WAV-файл
+    if wav_path != audio_path and os.path.exists(wav_path):
+        try:
+            os.remove(wav_path)
+        except Exception:
+            pass
+
     return json.dumps({"text": final_text}, ensure_ascii=False)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Использование: recognize.py <audio> <model>"}))
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "Использование: recognize.py <audio>"}))
         sys.exit(1)
 
     audio_path = sys.argv[1]
-    model_path = sys.argv[2]
-    print(recognize(audio_path, model_path))
+    # второй аргумент (модель Vosk) больше не нужен, но оставим для совместимости
+    print(recognize(audio_path))
