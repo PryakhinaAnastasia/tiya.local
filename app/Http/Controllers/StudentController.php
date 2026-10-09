@@ -16,13 +16,12 @@ class StudentController extends Controller
 {
     public function index(Request $request, AdaptiveService $adaptive)
     {
-        $type = $request->input('type'); // 1, 2, 3, 4 или null
-        $currentStep = (int) $request->input('step', 1); // по умолчанию 1
+        $type = $request->input('type');
+        $currentStep = (int) $request->input('step', 1);
 
         if ($type) {
             $task = Task::where('type', $type)->inRandomOrder()->first();
         } else {
-            // Если "Все" — идём по порядку: 1 → 2 → 3 → 4
             if ($currentStep > 4) {
                 $currentStep = 1;
             }
@@ -38,10 +37,8 @@ class StudentController extends Controller
         $currentStep = (int) $request->input('step', 1);
 
         if ($type) {
-            // Конкретный тип — рандом
             $task = Task::where('type', $type)->inRandomOrder()->first();
         } else {
-            // "Все" — идём по порядку
             if ($currentStep > 4) {
                 $currentStep = 1;
             }
@@ -59,16 +56,27 @@ class StudentController extends Controller
         GrammarCheckService $grammarService,
         PronunciationService $pronunciationService
     ) {
-        $request->validate(['audio' => 'required|file|mimes:wav,mp3']);
+        $request->validate(['audio' => 'required|file|max:102400']);
 
+        // 1. Сохраняем аудио
         $audioPath = $audioService->saveAudio($request->file('audio'));
-        $cleanPath = $audioService->applyNoiseReduction($audioPath);
+
+        // 2. Шумоподавление — НЕ применяем автоматически.
+        //    Оставляем на будущее как опциональный модуль.
+        $cleanPath = $audioPath;
+
+        // 3. Распознавание речи через Whisper
         $transcription = $speechService->recognize($cleanPath);
+
+        // 4. Проверка грамматики через LanguageTool
         $grammarResult = $grammarService->check($transcription);
         $grammarScore = $grammarService->calculateScore($grammarResult);
+
+        // 5. Оценка произношения (fabiosuizu)
         $pronunciationResult = $pronunciationService->evaluate($cleanPath);
         $pronunciationScore = $pronunciationResult['score'] ?? 0;
 
+        // 6. Сохраняем ответ
         $answer = new Answer();
         $answer->user_id = auth()->id();
         $answer->task_id = $task->id;
@@ -80,6 +88,7 @@ class StudentController extends Controller
         $answer->status = 'pending';
         $answer->save();
 
+        // 7. Прогресс
         Progress::create([
             'user_id' => auth()->id(),
             'task_id' => $task->id,

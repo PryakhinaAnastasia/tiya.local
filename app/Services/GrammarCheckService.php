@@ -8,12 +8,21 @@ class GrammarCheckService
 {
     public function check(string $text): array
     {
-        $response = Http::post('https://api.languagetool.org/v2/check', [
-            'text' => $text,
-            'language' => 'en-US',
-        ]);
+        try {
+            $response = Http::timeout(15)->post('https://api.languagetool.org/v2/check', [
+                'text' => $text,
+                'language' => 'en-US',
+            ]);
 
-        return $response->json();
+            if ($response->successful()) {
+                return $response->json() ?? ['matches' => []];
+            }
+
+            return ['matches' => [], 'error' => 'LanguageTool вернул ошибку: ' . $response->status()];
+
+        } catch (\Exception $e) {
+            return ['matches' => [], 'error' => 'LanguageTool недоступен: ' . $e->getMessage()];
+        }
     }
 
     public function calculateScore(array $grammarResult): float

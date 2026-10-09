@@ -30,6 +30,9 @@ Route::middleware(['auth'])->prefix('teacher')->group(function () {
     Route::post('/store-task', [TeacherController::class, 'storeTask'])->name('teacher.store-task');
     Route::get('/check/{answer}', [TeacherController::class, 'check'])->name('teacher.check');
     Route::post('/check/{answer}', [TeacherController::class, 'saveCheck'])->name('teacher.save-check');
+    Route::get('/students', [TeacherController::class, 'students'])->name('teacher.students');
+    Route::get('/student/{user}', [TeacherController::class, 'studentDetail'])->name('teacher.student-detail');
+    Route::post('/mark-expert/{answer}', [TeacherController::class, 'markExpert'])->name('teacher.mark-expert');
 });
 
 // Маршруты для администратора
